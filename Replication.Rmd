@@ -1,0 +1,218 @@
+---
+title: "Replication Project"
+author: "Grace Tien and Jessamin Birdsall"
+date: "March 15, 2015"
+output: html_document
+---
+
+```{r}
+# Set up libraries. 
+
+library(dplyr)
+library(ggplot2)
+library(grid)
+#Grid helps make nicer plots. 
+library(broom)
+
+# Install packages. Because we are working with the GSS Stata file (downloaded from the NORC website), we have to install the foreign package in order to read it in R. 
+
+install.packages("foreign")
+library(foreign)
+
+# Open the file. Within the code, we insert convert.underscore = TRUE because R Stata uses underscores in variable names, but R does not. 
+
+GSS.df <- read.dta("GSS7212_R6.DTA", convert.factors = FALSE, convert.underscore=TRUE)
+head(GSS.df)
+
+# Select relevant variables. We are interested primarily in the variables of adult religious affiliation (relig), adult Protestant affiliation (fund), childhood Protestant affiliation (fund16), and total number of children born (childs) to the women in the sample. We filter out data collected after the year 1998, because the authors the used GSS data until 1998. Like the authors, we consider only women aged 25-74 who were born between 1903 and 1973.
+
+GSS1_df <- GSS.df %>%
+  select(cohort, age, sex, relig, fund, fund16, childs, year) %>%
+  arrange(desc(cohort)) %>%
+  filter(year <= 1998, cohort >= 1903, cohort <= 1973, age >= 25, age <= 74, sex == 2, !is.na(relig), !is.na(fund), !is.na(fund16), !is.na(childs))
+  
+head(GSS1_df)
+
+```
+
+*Figure 1: Fertility by Denominational Type* 
+
+```{r}
+# Replicate Figure 1. The first figure in the paper is a graph of fertility by denominational type. 
+
+# Recode denominations. Before we can do the calculations that go into this figure, we have to first recode the denominations from the GSS variables into values we can use.
+
+adult_mainline <- ifelse(GSS1_df$fund == 2 | GSS1_df$fund == 3, 1, 0)
+
+# When adult.mainline = 1, it means that the person is mainline Protestant. When adult.mainline = 0, it means that the person is conservative Protestant.
+
+# Subset the mainline fertility data.
+
+mainline_childs <- GSS1_df  %>% 
+  select(cohort, childs)  %>% 
+  filter(adult_mainline == 1) %>%
+  group_by(cohort) %>%
+  summarise(mean(childs)/n_distinct(cohort))
+View(mainline_childs)
+
+# Subset the conservative fertility data.
+
+cons_childs <- GSS1_df  %>% 
+  select(cohort, childs)  %>% 
+  filter(adult_mainline == 0) %>%
+  group_by(cohort) %>%
+  summarise(mean(childs)/n_distinct(cohort))
+View(cons_childs)
+
+# Combine the fertility data for mainline and conservative.
+
+all_childs <- GSS1_df  %>% 
+  select(cohort, childs)  %>% 
+  group_by(cohort) %>%
+  summarise(mean(childs)/n_distinct(cohort))
+View(all_childs)
+
+# Convert to dataframes that ggplot can recognize.
+
+# Children born to mainline women. "CEB" stands for "children ever born."
+
+m_childs <- as.data.frame(mainline_childs)
+names(m_childs) = c("m_cohort","m_CEB")
+
+# Children born to conservative women:
+
+c_childs <- as.data.frame(cons_childs)
+names(c_childs) = c("c_cohort", "c_CEB")
+
+# Children born to all Protestant women:
+
+all_childs <- as.data.frame(all_childs)
+names(all_childs) = c("a_cohort", "a_CEB")
+
+# Plot CEB (children ever born) for all 3 cateories of women (mainline, conservative, and all together) by year. Use "loess" rather than "lm" to smooth the line. Shape = 1 makes the dots empty rather than filled in. 
+
+p <- ggplot() +
+  geom_point(data =  m_childs, aes(m_cohort, m_CEB), color = "firebrick") + 
+  geom_smooth(data = m_childs, aes(m_cohort, m_CEB), method = "loess", se = FALSE, color = "firebrick") +
+  ggtitle("Fertility by Denomination Type") + 
+  labs(x = "Year of Birth", y = "Births per Woman") +
+  ylim(c(1, 4)) + 
+  xlim(c(1903, 1950)) +
+  geom_point(data = c_childs, aes(c_cohort, c_CEB), shape = 1, color = "blue") + 
+  geom_smooth(data = c_childs, aes(c_cohort, c_CEB), method = "loess", se = FALSE, color = "blue") +
+  geom_smooth(data = all_childs, aes(a_cohort, a_CEB), method = "loess", se = FALSE, color = "black") + geom_smooth(data = all_childs, aes(a_cohort, a_CEB), method = "loess", se = FALSE, color = "black") +
+  #annotation_custom(grobTree(textGrob("FIG 1 - Fertility (children ever born) by denomination type: US Protestant women, 45-69 years old. CEB data are smoothed using loess regression.", x = 0.1, y = 0.1, hjust = 0, gp = gpar(col = "grey60", fontsize = 10, fontface = "italic")))) # We ran this line of code, but nothing showed up.
+  
+p
+
+```
+
+*Figure 2: Proportion of Mainline Protestants by Year*
+
+```{r}
+# Replicate Figure 2. The second figure shows the proportion of U.S. Mainline Protestants by year. 
+
+# Re-assign adult_mainline as a variable within GSS1_df.
+
+GSS1_df$adult_mainline <- ifelse(GSS1_df$fund == 2 | GSS1_df$fund == 3, 1, 0)
+
+#Subset the proportion of Mainline Protestants by year.
+
+m_prop <- GSS1_df  %>% 
+  group_by(year) %>%
+  summarise(total.prot = sum(fund), total.mainline= sum(adult_mainline)) %>%
+  mutate(prop.m = total.mainline/total.prot)
+ View(m_prop)
+
+# Plot the proportion of Mainline Protestants by year.
+
+p1 <- ggplot(data = m_prop, aes(x = year, y = prop.m)) + geom_point(color = "firebrick") + ggtitle("Proportion of Mainline Protestants") +
+  labs(x = "Year", y = "Percentage Mainline") +
+  ylim(c(0.2, 0.5)) +
+  xlim(c(1970, 2000)) +
+  geom_smooth(method = "loess", se = F) +
+# Add lines for 95% confidence intervals. 
+  geom_errorbar(aes(x = year, ymin = prop.m-ci, ymax = prop.m+ci), colour = "black", width = .1, position = position_dodge(.1))
+# Assign length of confidence interval line.
+ci <- 0.05
+
+p1
+
+```
+
+*Table 1: Denominational Switching by Type of Origin Denomination*
+
+```{r}
+# Replicate Table 1. The first table presents what percentage of people raised Protestant have A) retained affiliation of origin, B) switched to another type of Protestant, 3) switched to another religion, or 4) apostasized (switched to no religion.) The top half of the table presents these percentages for people raised mainline, and the bottom half of the table presents the percentages for people raised conservative.
+
+# Out of the multiple affiliations coded within the GSS dataset, recategorize adult Protestant affiliations into 2 categories: mainline and conservative. When adult_mainline = 1, it means the person is mainline, when adult_mainline = 0, the person is conservative.
+
+GSS1_df$adult_mainline <- ifelse(GSS1_df$fund == 2 | GSS1_df$fund == 3, 1, 0)
+
+# Recategorize childhood Protestant affiliation into 2 categories: mainline and conservative. When kid_mainline = 1, it means the person was raised mainline, when kid_mainline = 0, the person was raised conservative. 
+
+GSS1_df$kid_mainline <- ifelse(GSS1_df$fund16 == 2 | GSS1_df$fund16 == 3, 1, 0)
+
+# Create category for adults who switched to an "other" (e.g. non-Protestant) religion. Here we have to use the higher order variable of "relig" rather than "fund" because "fund" only captures Protestant affiliations, while "relig" captures others and nones outside of Protestantism. When adult_other = 1, the person falls into an "other" religious category; when adult_other = 0, the person is Protestant. 
+
+GSS1_df$adult_other <- ifelse(GSS1_df$relig == 2 | GSS1_df$relig == 3 | GSS1_df$relig == 5 | GSS1_df$relig == 6 | GSS1_df$relig == 7 | GSS1_df$relig == 8 | GSS1_df$relig == 9 | GSS1_df$relig == 10 | GSS1_df$relig == 11 | GSS1_df$relig == 12 | GSS1_df$relig == 13, 1, 0)
+
+# Recode category for adults who apostasized (switched to no religion). When adult_none = 1, the person has no religion; when adult_none = 0, the person identifies with a religion. 
+
+GSS1_df$adult_none <- ifelse(GSS1_df$relig == 4, 1, 0)
+
+# Calculate proportion of people raised mainline who remain mainline as adults (for column 1 of the table, top half).
+
+GSS1_df <- mutate(GSS1_df, pm_same = sum(ifelse(adult_mainline==1 & kid_mainline == 1,1,0))/sum(ifelse(kid_mainline==1,1,0)))
+
+# Calculate proportion of people raised mainline who converted to another type of Protestantism (for column 2 of the table, top half).
+
+GSS1_df <- mutate(GSS1_df, pm_otherprot = sum(ifelse(adult_mainline==0 & kid_mainline == 1,1,0))/sum(ifelse(kid_mainline==1,1,0)))
+
+# Calculate proportion of people raised mainline who converted another religion outside Protestantism (for column 3 of the table, top half).
+
+GSS1_df <- mutate(GSS1_df, pm_otherrel = sum(ifelse(adult_other==1 & kid_mainline == 1,1,0))/sum(ifelse(kid_mainline==1,1,0)))
+
+# Calculate proportion of people raised mainline who apostasized (for column 4, top half).
+
+GSS1_df <- mutate(GSS1_df, pm_none = sum(ifelse(adult_none==1 & kid_mainline == 1,1,0))/sum(ifelse(kid_mainline==1,1,0)))
+
+# Calculate proportion of people raised conservative who remain conservative as adults (for column 1, bottom half).
+
+GSS1_df <- mutate(GSS1_df, pc_same = sum(ifelse(adult_mainline==0 & kid_mainline == 0,1,0))/sum(ifelse(kid_mainline==0,1,0)))
+
+# Calculate proportion of people raised conservative who converted to another type of Protestantism (for column 2, bottom half).
+
+GSS1_df <- mutate(GSS1_df, pc_otherprot = sum(ifelse(adult_mainline==1 & kid_mainline == 0,1,0))/sum(ifelse(kid_mainline==0,1,0)))
+
+# Calculate proportion of people raised conservative who convereted to another religion outside Protestantism (column 3, bottom half).
+
+GSS1_df <- mutate(GSS1_df, pc_otherrel = sum(ifelse(adult_other==1 & kid_mainline == 0,1,0))/sum(ifelse(kid_mainline==0,1,0)))
+
+# Calculate proportion of people raised conservative who apostasized (for column 4, bottom half).
+
+GSS1_df <- mutate(GSS1_df, pc_none = sum(ifelse(adult_none==1 & kid_mainline == 0,1,0))/sum(ifelse(kid_mainline==0,1,0)))
+
+# Create top half of table (regarding people raised mainline).
+
+by_year <- group_by(GSS1_df, year)
+
+tbl_df(GSS1_df) %>%
+  select(cohort, pm_same, pm_otherprot, pm_otherrel, pm_none) %>%
+  group_by(cohort) %>%
+  arrange(desc(cohort))
+
+# Create bottom half of table (regarding people raised conservative).
+
+tbl_df(GSS1_df) %>%
+  select(cohort, pc_same, pc_otherprot, pc_otherrel, pc_none) %>%
+  group_by(cohort) %>%
+  arrange(desc(cohort)) %>%
+  
+```
+
+
+
+
+
+
