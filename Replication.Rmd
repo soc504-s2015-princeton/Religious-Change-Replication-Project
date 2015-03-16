@@ -100,9 +100,9 @@ p <- ggplot() +
   xlim(c(1903, 1950)) +
   geom_point(data = c_childs, aes(c_cohort, c_CEB), shape = 1, color = "blue") + 
   geom_smooth(data = c_childs, aes(c_cohort, c_CEB), method = "loess", se = FALSE, color = "blue") +
-  geom_smooth(data = all_childs, aes(a_cohort, a_CEB), method = "loess", se = FALSE, color = "black") + geom_smooth(data = all_childs, aes(a_cohort, a_CEB), method = "loess", se = FALSE, color = "black") +
+  geom_smooth(data = all_childs, aes(a_cohort, a_CEB), method = "loess", se = FALSE, color = "black") + geom_smooth(data = all_childs, aes(a_cohort, a_CEB), method = "loess", se = FALSE, color = "black")
   #annotation_custom(grobTree(textGrob("FIG 1 - Fertility (children ever born) by denomination type: US Protestant women, 45-69 years old. CEB data are smoothed using loess regression.", x = 0.1, y = 0.1, hjust = 0, gp = gpar(col = "grey60", fontsize = 10, fontface = "italic")))) # We ran this line of code, but nothing showed up.
-  
+  # Unfortunately we couldn't quite figure out how to inlude the legend for this layered plot. The blue dots and blue smoothed regression present the conservative fertility data, the red dots and line present the mainline fertility data, and the black line presents the average fertility data.  
 p
 
 ```
