@@ -1,55 +1,86 @@
 ---
 title: "Replication of Demographic Imperative Project"
 author: "Grace Tien and Jessamin Birdsall"
-date: "April 26, 2015"
+date: "May 12, 2015"
 output: html_document
 ---
 
 The paper we have chosen to replicate is: "The Demographic Imperative in Religious Change in the United States," written by Hout, Greeley, and Wilde (2001). The question that the authors are trying to answer is: Over the course of the last century, why has affiliation with "mainline" Protestantism declined, while affiliation with "conservative" Protestantism has increased in the United States?  (Broadly speaking, "conservative" refers to more theologically conservative denominations and "mainline" refers to more liberal denominations.) To date, almost all sociological scholarship related to this question has assumed that mainline decline is the result of people converting/switching from mainline to conservative Protestantism. This paper argues that denominational switching actually accounts for *none* of the mainline decline. They argue that the most significant variable explaning mainline decline is *higher fertility* among conservative Protestants. In this paper, they use GSS data to test 4 hypotheses about the source of mainline decline: 1) higher fertility of conservative Protestants, 2) higher rate of mainline to conservative switching, 3) higher rate of apostasy among mainliners, 4) higher inflow of outsiders to conservative Protestant denominations. Looking at all cohorts born between 1900 and 1973, the authors develop demographic simulation models based on the variables of fertility, religious origins, and current religion. They then make counterfactual predictions in order to isolate the relative contributions of each of these variables to the observed decline in mainline affiliation. 
 
-```{r}
+```{r, warning = FALSE}
 # Install packages and load libraries. Because we are working with the GSS Stata file (downloaded from the NORC website), we have to use the foreign package in order to read it in R. To read the excel files, we need the xlsx package. 
 
 library(dplyr)
 library(ggplot2)
 library(broom)
-library(grid)
 library(stargazer)
+library(xtable)
 library(foreign)
 library(xlsx)
 library(gdata)
+library(survey)
+library(grid)
+library(gridExtra)
 
 # Open the file. Within the code, we insert convert.underscore = TRUE because R Stata uses underscores in variable names, but R does not. 
 
-GSS.df <- read.dta("GSS7214_R1.DTA", convert.factors = FALSE, convert.underscore=TRUE)
+GSS.df <- read.dta("GSS7214_R2.DTA", convert.factors = FALSE, convert.underscore=TRUE)
 
-# Load the other documents shared by the authors of the paper. The authors shared a few excel files with us that show some of their calculations. We load them here for reference, although we are not able to interpret all of the calculations within them. 
+# Load data from Mike Hout (author). We load this file because it contains the data on denominational switching that we will need for some of the models.
 
-maintrend.df <- read.dta("Hout/maintrend.dta", convert.factors = FALSE, convert.underscore=TRUE)
+hout.df <- read.xlsx("Scenarios1.xls", sheetName = "switching.within.prot")
 
-maincohort.df <- read.dta("Hout/maincohort.dta", convert.factors = F, convert.underscore=TRUE)
+# Select relevant variables. The variable names are taken directly from the GSS file. We are interested primarily in the variables of adult religious affiliation (relig), adult Protestant affiliation (fund), childhood Protestant affiliation (fund16), and total number of children born (childs) to the women in the sample. We filter out data collected after the year 1998, because the authors the used GSS data until 1998. Like the authors, we consider only women aged 25-74 who were born between 1903 and 1973.
 
-moblow.df <- read.dta("Hout/moblow.dta", convert.factors = F, convert.underscore=TRUE)
+# To handle the weights, we also include oversamp (to handle oversampling of the black population), formwt (to correct for errors in form randomization), wtssall (to deal with weights), sampcode (to handle sampling error), sample(related to sampling frame and method). We received guidance on handling GSS weights in R from Anthony Damico (code available in his github repo).
 
-hout.df <- read.xlsx("Hout/Scenarios.xls", sheetName = "switching.within.prot")
-
-# Select relevant variables. We are interested primarily in the variables of adult religious affiliation (relig), adult Protestant affiliation (fund), childhood Protestant affiliation (fund16), and total number of children born (childs) to the women in the sample. We filter out data collected after the year 1998, because the authors the used GSS data until 1998. Like the authors, we consider only women aged 25-74 who were born between 1903 and 1973.
-
-GSS1.df <- GSS.df %>%
-  select(cohort, age, sex, relig, relig16, fund, fund16, childs, year) %>%
+GSS.new.df <- GSS.df %>%
+  select(cohort, age, sex, relig, relig16, fund, fund16, childs, year, oversamp, formwt, wtssall, sampcode, sample, adults) %>%
   arrange(desc(cohort)) %>%
-  filter(year <= 1998, cohort >= 1903, cohort <= 1973, age >= 25, age <= 74, !is.na(relig), !is.na(relig16), !is.na(fund), !is.na(fund16), !is.na(childs))
+  filter(year <= 1998, cohort >= 1903, cohort <= 1973, age >= 25, age <= 74)
+
+# Remove missing data.
+
+GSS1.df <- na.omit(GSS.new.df)
+
+# Calculate the composite weight and recode the sample variable to manage black oversamples. 
+
+GSS1.df <- 
+  transform( 
+GSS1.df,
+# The calculation for compwt comes from http://sda.berkeley.edu/D3/GSS10/Doc/gs100195.htm#COMPWT
+compwt =  oversamp  *  formwt * wtssall * adults,
+# The calculation for samplerc comes from http://sda.berkeley.edu/D3/GSS10/Doc/gs100195.htm#SAMPLERC
+samplerc = 
+# If sample is a three or a four, samplerc should be a three
+ifelse(sample %in% 3:4, 3, 
+# If sample is a six or a seven, samplerc should be a six
+ifelse(sample %in% 6:7, 6, 
+# Otherwise, samplerc should just be set to sample
+sample))
+)
+
+# Specify survey design
+GSS.design <- 
+  svydesign( 
+~sampcode, 
+strata = ~samplerc, 
+data = subset(GSS1.df, !is.na(sampcode)) , 
+weights = ~compwt, 
+nest = TRUE 
+)
+
 ```
 
 *Figure 1: Fertility by Denominational Type* 
 
-```{r}
+```{r, warning = FALSE}
 # Replicate Figure 1. The first figure in the paper is a graph of fertility by denominational type (e.g. mainline and conservative). The x axis is year of birth (ranging from 1903 to 1950) and the y axis is births per woman.
 
 # Recode denominations. Before we can do the calculations that go into this figure, we have to first recode the denominations from the GSS variables into values we can use. A person is considered mainline if s/he answered "Protestant" to the relig question and either "liberal" or "moderate" to the fund question. This is consistent with the authors' categorization, as best we can understand it. 
 
-GSS1.df$adult_mainline <- ifelse((GSS1.df$fund == 2 | GSS1.df$fund == 3) & GSS1.df$relig == 1, 1, 0)
-adult_mainline <- GSS1.df$adult_mainline
+GSS1.df$adult_main <- ifelse((GSS1.df$fund == 2 | GSS1.df$fund == 3) & GSS1.df$relig == 1, 1, 0)
+adult_main <- GSS1.df$adult_main
 
 GSS1.df$adult_cons <- ifelse((GSS1.df$fund == 1) & GSS1.df$relig == 1, 1, 0)
 adult_cons <- GSS1.df$adult_cons
@@ -57,133 +88,169 @@ adult_cons <- GSS1.df$adult_cons
 GSS1.df$adult_prot <- ifelse((GSS1.df$fund <=3 ) & GSS1.df$relig == 1, 1, 0)
 adult_prot <- GSS1.df$adult_prot
 
-# Subset the mainline fertility data.
+# Subset the Protestant data.
 
-mainline_childs <- GSS1.df  %>% 
-  select(cohort, childs)  %>% 
-  filter(adult_mainline == 1) %>%
-  group_by(cohort) %>%
-  summarise(mean(childs)/n_distinct(cohort))
+prot_only <- GSS1.df %>%
+  filter(adult_prot == 1)
 
-# Subset the conservative fertility data.
+# Specify the survey design for the Protestant subset.
 
-cons_childs <- GSS1.df  %>% 
-  select(cohort, childs)  %>% 
-  filter(adult_cons == 1) %>%
-  group_by(cohort) %>%
-  summarise(mean(childs)/n_distinct(cohort))
+GSS.design_prot <- 
+  svydesign( 
+    ~sampcode, 
+    strata = ~samplerc, 
+data = subset(prot_only, !is.na(sampcode)) , 
+weights = ~compwt, 
+nest = TRUE 
+)
 
-# Combined fertility rates for Protestants.
+# Subset the mainline data.
+main_only <- GSS1.df %>%
+  filter(adult_main == 1)
 
-all_childs <- GSS1.df  %>% 
-  select(cohort, childs)  %>% 
-  filter(adult_prot == 1) %>%
-  group_by(cohort) %>%
-  summarise(mean(childs)/n_distinct(cohort))
+# Specify survey design for the mainline subset.
+GSS.design_main <- 
+  svydesign( 
+    ~sampcode, 
+strata = ~samplerc, 
+data = subset(main_only, !is.na(sampcode)) , 
+weights = ~compwt, 
+nest = TRUE 
+)
 
-# Convert to dataframes that ggplot can recognize.
+# Subset the conservative data.
+cons_only <- GSS1.df %>%
+  filter(adult_cons == 1)
 
-# Children born to mainline women. "CEB" stands for "children ever born."
+# Specify the survey design for the conservative subset.
+GSS.design_cons <- 
+  svydesign( 
+    ~sampcode, 
+  strata = ~samplerc, 
+data = subset(cons_only, !is.na(sampcode)) , 
+weights = ~compwt, 
+nest = TRUE 
+)
 
-m_childs <- as.data.frame(mainline_childs)
-names(m_childs) = c("m_cohort","m_CEB")
+# Calculate the weighted mean number of children born to mainline women. Group by cohort.
+mean_main_childs <- svyby(~childs, ~cohort, GSS.design_main, svymean)
 
-# Children born to conservative women:
+# Calculate the weighted mean number of children born to conservative women. Group by cohort.
+mean_cons_childs <- svyby(~childs, ~cohort, GSS.design_cons, svymean)
 
-c_childs <- as.data.frame(cons_childs)
-names(c_childs) = c("c_cohort", "c_CEB")
+# Calculate the weighted mean number of children born to all Protestant women. Group by cohort.
+mean_prot_childs <- svyby(~childs, ~cohort, GSS.design_prot, svymean)
 
-# Children born to all Protestant women:
+# Plot. We got some inspiration for the annotation from Megan and Kalyani's code (thanks!).
 
-all_childs <- as.data.frame(all_childs)
-names(all_childs) = c("a_cohort", "a_CEB")
-
-# Plot CEB (children ever born) for all 3 categories of women (mainline, conservative, and all together) by year of birth. The authors use "loess" rather than linear regression to fit the line more closely to the data. Shape = 1 makes the dots empty rather than filled in. 
-
-p1 <- ggplot() +
-  geom_point(data =  m_childs, aes(m_cohort, m_CEB), color = "blue") + 
-  geom_smooth(data = m_childs, aes(m_cohort, m_CEB), size = 1.5, method = "loess", span = .2, se = FALSE, color = "blue") +
+fig1 <- ggplot(data = mean_prot_childs, aes(cohort, childs, color = "childs")) +
+  geom_point(data =  mean_main_childs, aes(cohort, childs, color = "blue")) + 
+  geom_smooth(data = mean_main_childs, aes(cohort, childs, color = "blue"), size = 1.5, method = "loess", span = .3, se = FALSE, color = "blue") +
   ggtitle("Fertility by Denomination Type") + 
   labs(x = "Year of Birth", y = "Births per Woman") +
   ylim(c(1, 4)) + 
   xlim(c(1903, 1950)) +
-  geom_point(data = c_childs, aes(c_cohort, c_CEB), shape = 1, color = "red") + 
-  geom_smooth(data = c_childs, aes(c_cohort, c_CEB), method = "loess", span = .2, se = FALSE, color = "red") +
-  geom_smooth(data = all_childs, aes(a_cohort, a_CEB), method = "loess", span = .2, se = FALSE, color = "black")
-# annotation_custom(grobTree(textGrob("FIG 1 - Fertility (children ever born) by denomination type: US Protestant women, 45-69 years old. CEB data are smoothed using loess regression.", x = 0.1, y = 0.1, hjust = 0, gp = gpar(col = "grey60", fontsize = 10, fontface = "italic")))) 
-# For some reason this annotation is not showing up properly. 
-# The red line corresponds to mainliners, blue to conservatives, and black to the combined group. 
-p1
+  geom_point(data = mean_cons_childs, aes(cohort, childs, color = "red"), shape = 1) + 
+  geom_smooth(data = mean_cons_childs, aes(cohort, childs, color = "red"), method = "loess", span = .3, se = FALSE, color = "red") +
+  geom_point(data = mean_prot_childs, aes(cohort, childs, color = "black")) +
+  geom_smooth(data = mean_prot_childs, aes(cohort, childs, color = "black"), method = "loess", span = .3, se = FALSE, color = "black") +
+  scale_colour_manual(values=c("blue", "red", "black"), labels=c("Mainline: Children Ever Born", "Conservative: Children Ever Born", "All Protestant: Children Ever Born")) + 
+  theme(legend.key = element_blank(), 
+        legend.title = element_blank(),
+        legend.position = "top",
+        legend.box = "horizontal") +
+  guides(col = guide_legend()) +
+  scale_linetype_manual(values = c(rep("solid", 3)))
+fig1.note <- arrangeGrob(fig1, 
+        sub = textGrob("Figure 1: Fertility by denominational type: U.S. Protestant women, 45 - 69 years old. Data are from the GSS, 1973-98, \nsmoothed using loess regression",
+        x = .1, hjust = 0, vjust = .5, 
+      gp = gpar(fontface = "italic", fontsize = 10)))
+print(fig1.note)
 
 ```
 
 *Figure 2: Proportion of Protestants professing a mainline denomination by year*
 
-```{r}
+```{r, warning = FALSE}
 # Replicate Figure 2. This figure shows the proportion of U.S. Protestants who identify as mainline by year in which the survey was taken. The x axis is year of survey (ranging from 1973 to 1998), and the y axis is proportion of Protestants professing a mainline affiliation. 
 
-# Calculate the proportion of Mainline Protestants by year.
+# Although we were able to apply to survey weights to the mean values for Figure 1 (and later for the extension figure), we were not able to figure out how to apply survey weights to these calculations around proportions of the recoded categorical values. 
 
-m_prop <- GSS1.df  %>% 
+main_prop <- GSS1.df  %>% 
   group_by(year) %>%
-  summarise(total.prot = sum(adult_prot), total.mainline= sum(adult_mainline)) %>%
-  mutate(prop.m = total.mainline/total.prot)
+  summarise(total.prot = sum(adult_prot), total.mainline= sum(adult_main)) %>%
+  mutate(prop.main = total.mainline/total.prot)
 
-# Calculate confidence intervals
+# Create function to calculate confidence intervals
 
-m_prop$se <- sqrt((m_prop$prop.m * (1-m_prop$prop.m))/m_prop$total.prot)
-m_prop$lower <- m_prop$prop.m - 1.96 * m_prop$se
-m_prop$upper <- m_prop$prop.m + 1.96 * m_prop$se
+ci = function(main_prop) {
+  se = main_prop$se <- sqrt((main_prop$prop.main * (1-main_prop$prop.main))/main_prop$total.prot)
+lower <- main_prop$prop.main - 1.96 *se
+upper <- main_prop$prop.main + 1.96 *se
+cbind(lower, upper)
+}
+
+# Store confidence intervals
+myCi <- ci(main_prop)
 
 # Plot.
 
-p2 <- ggplot(data = m_prop, aes(x = year, y = prop.m)) + geom_point(color = "firebrick") + ggtitle("Proportion of Mainline Protestants") +
+fig2 <- ggplot(data = main_prop, aes(x = year, y = prop.main)) + geom_point(color = "firebrick") + ggtitle("Proportion of Mainline Protestants") +
   labs(x = "Year", y = "Percentage Mainline") +
   ylim(c(0.3, 0.6)) +
   xlim(c(1970, 2000)) +
   geom_smooth(method = "loess", span = .8, se = F) +
-  geom_errorbar(aes(x = year, ymin = lower, ymax = upper), colour = "black")
-p2
+  geom_errorbar(aes(x = year, ymin = myCi[,1], ymax = myCi[,2]), colour = "black") 
+fig2.note <- arrangeGrob(fig2, 
+      sub = textGrob("Figure 2: Proportion of Protestants professing a mainline denomination by year. US Protestants, \n25-74 years old,1973-98. Data are from the GSS, 1973-98, and were smoothed using loess. Vertical \nlines show 95% confidence interval for each observed percentage. Estimates take account of sampling design.", 
+        x = .1, hjust = 0, vjust = .5, 
+        gp = gpar(fontface = "italic", fontsize = 10)))
+print(fig2.note)
   
+
 ```
 
 *Figure 3: Proportion of Protestants Professing a Mainline Denomination of Year of Birth*
 
-```{r}
+```{r, warning = FALSE}
 # This figure shows the proportion of U.S. Protestants who identify as mainline by cohort. The x axis is year of birth (ranging from 1903 to 1973), and the y axis is proportion of Protestants professing a mainline affiliation. 
 
 # Calculate the proportion of mainline Protestants out of the total Protestants. Group by cohort. 
 
-m_prop_cohort <- GSS1.df  %>% 
+main_prop_cohort <- GSS1.df  %>% 
   group_by(cohort) %>%
-  summarise(total.prot = sum(adult_prot), total.mainline= sum(adult_mainline)) %>%
-  mutate(prop.m = total.mainline/total.prot)
+  summarise(total.prot = sum(adult_prot), total.mainline= sum(adult_main)) %>%
+  mutate(prop.main = total.mainline/total.prot)
 
-# Calculate confidence intervals
+# Calculate confidence intervals using function created earlier. Store values.
 
-m_prop_cohort$se <- sqrt((m_prop_cohort$prop.m * (1-m_prop_cohort$prop.m))/m_prop_cohort$total.prot)
-m_prop_cohort$lower <- m_prop_cohort$prop.m - 1.96 * m_prop_cohort$se
-m_prop_cohort$upper <- m_prop_cohort$prop.m + 1.96 * m_prop_cohort$se
+myCi2 <- ci(main_prop_cohort)
 
 # Plot
 
-p3 <- ggplot(data = m_prop_cohort, aes(x = cohort, y = prop.m)) + geom_point(color = "firebrick") + ggtitle("Proportion of Mainline Protestants by Year of Birth") +
+fig3 <- ggplot(data = main_prop_cohort, aes(x = cohort, y = prop.main)) + geom_point(color = "firebrick") + ggtitle("Proportion of Mainline Protestants by Year of Birth") +
   labs(x = "Year of Birth", y = "Percentage Mainline") +
   ylim(c(0.2, 0.8)) +
   xlim(c(1900, 1975)) +
   geom_smooth(method = "lm", se = F) +
   geom_smooth(method = "loess", span = .4, se = F) +
-  geom_errorbar(aes(x = cohort, ymin = lower, ymax = upper), colour = "black")
-p3
+  geom_errorbar(aes(x = cohort, ymin = myCi2[,1], ymax = myCi2[,2]), colour = "black")
+fig3.note <- arrangeGrob(fig3, 
+      sub = textGrob("Figure 3: Proportion of Protestants professing a mainline denomination by year of birth. Data \nare from the GSS, 1973-98, and were smoothed using linear and loess regression. Vertical \nlines show 95% confidence interval for each observed percentage. Estimates take account of sampling design effects.", 
+        x = .1, hjust = 0, vjust = .5, 
+        gp = gpar(fontface = "italic", fontsize = 10)))
+print(fig3.note)
+
 
 ```
 
 *Figure 5: Observed Percentage of 25-74-year-old U.S. Protestants professing a mainline denomination and that predicted by switching between Protestant denominations by year of birth*
+(We have skipped Figure 4 because it incorporates a demographic model that we do not understand.)
 
-```{r}
-# The purpose of this figure is to show the observed decline in mainline affiliation, and the predicted decline if we look only at switching. We draw upon the data stored in the hout.df because it is otherwise unclear how the authors generated switching from the raw data. 
+```{r, warning = FALSE}
+# The purpose of Figure 5 is to show the observed decline in mainline affiliation, and the predicted decline if we look only at switching. We draw upon the data stored in the hout.df because it is otherwise unclear how the authors generated switching from the raw data. 
 
-# Model 1: this will help us to predict the proportion of mainline affiliation by proportion of people who have switched from mainline to conservative. 
+# Model 1: this will help us to predict the proportion of mainline affiliation by proportion of people who have switched from mainline to conservative. The authors use logistic regression. 
 
 model1 <- glm(prop.main ~ prop.switch.mtoc, data = hout.df)
 stargazer(model1, type = "text")
@@ -205,99 +272,94 @@ hout.df$pred_prop2 <- pred_prop2
 
 # Plot observed and fitted values. Smooth using bandwidth of .4
 
-ggplot(hout.df, aes(x = birth.year, y = prop.main)) +
-  geom_point(color = "black") +
-  geom_smooth(aes(y = prop.main), method = "loess", se = F, span = .4, color = "black") +
-  geom_point(aes(y = pred_prop1), color = "red") +
-  geom_smooth(aes(y = pred_prop1), method = "loess", se = F, span = .4, color = "red") +
-  geom_point(aes(y = pred_prop2), color = "blue") +
-  geom_smooth(aes(y = pred_prop2), method = "loess", se = F, span = .4, color = "blue") +
+fig5 <- ggplot(hout.df, aes(x = birth.year, y = prop.main)) +
+  geom_point(aes(x = birth.year, y = prop.main, color = "black")) +
+  geom_smooth(aes(y = prop.main, color = "black"), method = "loess", se = F, span = .4) +
+  geom_point(aes(y = pred_prop1, color = "red")) +
+  geom_smooth(aes(y = pred_prop1, color = "red"), method = "loess", se = F, span = .4) +
+  geom_point(aes(y = pred_prop2, color = "blue")) +
+  geom_smooth(aes(y = pred_prop2, color = "blue"), method = "loess", se = F, span = .4) +
   ylim(.3, .7) +
   ggtitle("Proportion Mainline, Observed and Predicted by Switching") +
-  labs(x = "Year of Birth", y = "Percentage Mainline")
+  labs(x = "Year of Birth", y = "Percentage Mainline") +
+    scale_colour_manual(values=c("black", "red", "blue"), labels=c("Observed Percentage", "Predicted by Switching: Mainline to Conservative", "Predicted by Switching: Conservative to Mainline")) +
+  theme(legend.key = element_blank(), 
+        legend.title = element_blank(),
+        legend.position = "top",
+        legend.box = "horizontal") +
+  guides(col = guide_legend()) +
+  scale_linetype_manual(values = c(rep("solid", 3)))
+fig5.note <- arrangeGrob(fig5, 
+      sub = textGrob("Figure 5: Observed percentage of 25-74 year-old U.S. Protestants professing a mainline \ndenomination and that predicted by switching between Protestant denominations by year of birth. \nData are from the GSS, 1973-98, and were smoothed using loess regression (bandwidth = .4). \nEstimates take account of sampling design effects.", 
+        x = .1, hjust = 0, vjust = .5, 
+        gp = gpar(fontface = "italic", fontsize = 10)))
+print(fig5.note)
 
-# The black line corresponds to the observed decline, the red line to the predictions based on Model 1 (mainline to conservative switching), and the blue line to the predictions based on Model 2 (conservative to mainline switching). Model 1 is producing predictions in line with the authors' observations, but Model 2 is not. We structured the model in the same way for both, so we are not sure why Model 2 is not producing the same predictions. 
+# Our Model 1 predictions are in line with the authors' Model 1 predictions. However, our Model 2 predictions do not match the Model 2 predictions from the authors. We are not sure why this is the case. It may be related to the survey weights, which we were not able to fully apply.
 
 ```
 
 *Table 1: Denominational Switching by Type of Origin Denomination*
 
-```{r}
+```{r, warning = FALSE}
 # As mentioned above, many social scientists and religious leaders have assumed that the phenonemon of switching (converting from one denomination to the other) is the primary explanatory variable behind the decline in mainline Protestant affiliation. The purpose of this table is to capture to what extent switching has happened across time, both within Protestantism and outside (to other religions or to no religion).
 
 # Create new data frame with mutated variables that capture switching dynamics. 
 
 GSS2.df <- GSS1.df %>% 
-  select(cohort, relig, relig16, fund, fund16) %>%
-  mutate(adult_mainline = ifelse(fund == 2 | fund == 3 & relig == 1, 1, 0), 
-kid_mainline = ifelse(fund16 == 2 | fund16 == 3 & relig16 == 1, 1, 0), 
-adult_other = ifelse(fund >2 & relig == 2 | relig == 3 | relig == 5 | relig == 6 | relig == 7 | relig == 8 | relig == 9 | relig == 10 | relig == 11 | relig == 12 | relig == 13, 1, 0),
-adult_none = ifelse(fund >1 & relig == 4, 1, 0),
-pm_same = sum(ifelse(adult_mainline==1 & kid_mainline == 1, 1, 0))/sum(ifelse(kid_mainline==1,1,0)),
-         pm_otherprot = sum(ifelse(adult_mainline==0 & kid_mainline == 1,1,0))/sum(ifelse(kid_mainline==1,1,0)),
-         pm_otherrel = sum(ifelse(adult_other==1 & kid_mainline == 1,1,0))/sum(ifelse(kid_mainline==1,1,0)),
-         pm_none = sum(ifelse(adult_none==1 & kid_mainline == 1,1,0))/sum(ifelse(kid_mainline==1,1,0)),
-         pc_same = sum(ifelse(adult_mainline==0 & kid_mainline == 0,1,0))/sum(ifelse(kid_mainline==0,1,0)),
-         pc_otherprot = sum(ifelse(adult_mainline==1 & kid_mainline == 0,1,0))/sum(ifelse(kid_mainline==0,1,0)),
-         pc_otherrel = sum(ifelse(adult_other==1 & kid_mainline == 0,1,0))/sum(ifelse(kid_mainline==0,1,0)),
-         pc_none = sum(ifelse(adult_none==1 & kid_mainline == 0,1,0))/sum(ifelse(kid_mainline==0,1,0)))
-
-# Put in table format that aggregates into decades.
-
-tb.1 <- GSS2.df %>%
-  mutate(tb_period = ifelse(cohort >= 1900 & cohort <= 1909, "1900-9", "GSS2.df"),
+  select(cohort, relig, relig16, fund, fund16) %>% # Select variables of interest
+  mutate(tb_period = ifelse(cohort >= 1900 & cohort <= 1909, "1900-9", "GSS2.df"), # Aggregate data into decades
        tb_period = ifelse(cohort >= 1910 & cohort <= 1919, "1910-19", tb_period),
        tb_period = ifelse(cohort >= 1920 & cohort <= 1929, "1920-29", tb_period),
        tb_period = ifelse(cohort >= 1930 & cohort <= 1939, "1930-39", tb_period),
        tb_period = ifelse(cohort >= 1940 & cohort <= 1940, "1940-49", tb_period),
        tb_period = ifelse(cohort >= 1950 & cohort <= 1959, "1950-59", tb_period),
        tb_period = ifelse(cohort >= 1960 & cohort <= 1973, "1960-73", tb_period)) %>%
-  arrange(cohort) %>% 
   group_by(tb_period) %>%
-  summarise(mean_pm_same = mean(pm_same),
-            mean_pm_otherprot = mean(pm_otherprot),
-            mean_pm_otherrel = mean(pm_otherrel),
-            mean_pm_none = mean(pm_none),
-            mean_pc_same = mean(pc_same),
-            mean_pc_otherprot = mean(pc_otherprot),
-            mean_pc_otherrel = mean(pc_otherrel),
-            mean_pc_none = mean(pc_none)) 
+  arrange(cohort) %>% 
+  mutate(adult_main = ifelse(fund == 2 | fund == 3 & relig == 1, 1, 0), # People who identify as mainline
+    kid_main = ifelse(fund16 == 2 | fund16 == 3 & relig16 == 1, 1, 0), # People raised mainline 
+    adult_other = ifelse(fund >2 & relig == 2 | relig == 3 | relig == 5 | relig == 6 | relig == 7 | relig == 8 |   relig == 9 | relig == 10 | relig == 11 | relig == 12 | relig == 13, 1, 0), # People who identify with a non-Protestant religion
+    adult_none = ifelse(relig == 4, 1, 0), # People who identify with no religion
+        pm_same = sum(ifelse(adult_main == 1 & kid_main == 1, 1, 0))/sum(ifelse(kid_main == 1,1,0)), # Proportion of people raised mainline who remain mainline
+         pm_otherprot = sum(ifelse(adult_main == 0 & kid_main == 1,1,0))/sum(ifelse(kid_main == 1,1,0)), # Proportion of people raised mainline who switched to conservative Protestantism.
+         pm_otherrel = sum(ifelse(adult_other == 1 & kid_main == 1,1,0))/sum(ifelse(kid_main == 1,1,0)), # Proportion of people raised mainline who switched to another religion. 
+         pm_none = sum(ifelse(adult_none == 1 & kid_main == 1,1,0))/sum(ifelse(kid_main == 1,1,0)), # Proportion of people raised mainline who apostasized. 
+         pc_same = sum(ifelse(adult_main == 0 & kid_main == 0,1,0))/sum(ifelse(kid_main == 0,1,0)), # Proportion of people raised conservative who remain conservative 
+         pc_otherprot = sum(ifelse(adult_main == 1 & kid_main == 0,1,0))/sum(ifelse(kid_main == 0,1,0)), # Proportion of people raised conservative who switched to mainline Protestantism 
+         pc_otherrel = sum(ifelse(adult_other == 1 & kid_main == 0,1,0))/sum(ifelse(kid_main == 0,1,0)), # Proportion of people raised conservative who switched to another religion
+         pc_none = sum(ifelse(adult_none == 1 & kid_main == 0,1,0))/sum(ifelse(kid_main == 0,1,0))) # Proportion of people raised conservative who apostasized
 
+# Put in table format that aggregates into decades.
+
+tb.1 <- GSS2.df %>%
+  arrange(cohort) %>% 
+  group_by(tb_period) %>% # Group by decade
+  summarise(mean_pm_same = round(mean(pm_same), 2), # Average proportions of each category for each decade
+            mean_pm_otherprot = round(mean(pm_otherprot), 2),
+            mean_pm_otherrel = round(mean(pm_otherrel), 2),
+            mean_pm_none = round(mean(pm_none), 2),
+            mean_pc_same = round(mean(pc_same), 2),
+            mean_pc_otherprot = round(mean(pc_otherprot), 2),
+            mean_pc_otherrel = round(mean(pc_otherrel), 2),
+            mean_pc_none = round(mean(pc_none), 2)) 
+colnames(tb.1) <- c("Decade", "Same as Origin (M)", "Other Protestant (M)", "Other Religion (M)", "No Religion (M)", "Same as Origin (C)", "Other Protestant (C)", "Other Religion (C)", "No Religion (C)")
 tb.1
 
-# After many, many hours, this code is still not doing exactly what we want it to do. In an earlier version, we were able to get the code to calculate the proportions by decade, but for some reason the code is now just returning one proporation across all decades. 
+# The percentages calculated above are similar to those in the paper but not exact. This may be related to the application of survey weights, or the amalgamation of variables, which the authors did not specifiy in the paper how this was done. 
+
 ```
 
 *Table 2: Denominational Switching by Type of Current Denomination*
 
 Table 2 is similar to Table 1, but in reverse. It shows, for people who currently identify as mainline, the proportions who identified as other Protestant, other religion, or no religion as a child. It then shows the same for people who currently identify as conservative.
 
-```{r, eval = FALSE}
-# We have asked R not to evaluate this chunk of code, because, after repeated attempts to knit, we kept getting the following error message: Error in parse(text = x, srcfile = src) : <text>:22:1:unexpected symbol 21: 22: tb.2 ^ Calls: <Anonymous>... evaluate -> parse_all -> parse_all.character -> parse
+```{r, warning = FALSE}
 
-# Create new data frame with mutated variables that capture switching dynamics
-library(dplyr)
+# Create new data frame with mutated variables that capture switching dynamics.
+
 GSS3.df <- GSS1.df %>% 
   select(cohort, relig, relig16, fund, fund16) %>%
-  mutate(adult_mainline = ifelse(fund == 2 | fund == 3 & relig == 1, 1, 0), 
-  adult_cons = ifelse(fund == 1 & relig == 1, 1, 0),
-  kid_cons = ifelse(fund16 == 1 & relig16 == 1, 1, 0),
-kid_mainline = ifelse(fund16 == 2 | fund16 == 3 & relig16 == 1, 1, 0), 
-kid_other = ifelse(fund16 > 2 & relig16 == 2 | relig16 == 3 | relig16 == 5 | relig16 == 6 | relig16 == 7 | relig16 == 8 | relig16 == 9 | relig16 == 10 | relig16 == 11 | relig16 == 12 | relig16 == 13, 1, 0),
-kid_none = ifelse(fund16 >1 & relig16 == 4, 1, 0),
-pm_same = sum(ifelse(kid_mainline == 1 & adult_mainline==1, 1, 0))/sum(ifelse(adult_mainline == 1,1,0)),
-         pm_otherprot = sum(ifelse(kid_cons == 1 & adult_mainline==1,1,0))/sum(ifelse(adult_mainline == 1,1,0)),
-         pm_otherrel = sum(ifelse(kid_other == 1 & adult_mainline == 1,1,0))/sum(ifelse(adult_mainline == 1,1,0)),
-         pm_none = sum(ifelse(kid_none ==1 & adult_mainline == 1,1,0))/sum(ifelse(adult_mainline == 1,1,0)),
-         pc_same = sum(ifelse(kid_cons == 1 & adult_cons == 1,1,0))/sum(ifelse(adult_cons == 1,1,0)),
-         pc_otherprot = sum(ifelse(kid_cons == 1& adult_cons == 1,1,0))/sum(ifelse(adult_cons == 1,1,0)),
-         pc_otherrel = sum(ifelse(kid_other == 1 & adult_cons == 1,1,0)/sum(ifelse(adult_cons == 1,1,0)),
-         pc_none = sum(ifelse(kid_none == 1 & adult_cons == 1,1,0)/sum(ifelse(adult_cons == 1,1,0)))
-
-# Put in table format that aggregates into decades
-
-tb.2 <- GSS3.df %>%
- arrange(cohort)  %>% 
   mutate(tb_period = ifelse(cohort >= 1900 & cohort <= 1909, "1900-9", "GSS3.df"),
        tb_period = ifelse(cohort >= 1910 & cohort <= 1919, "1910-19", tb_period),
        tb_period = ifelse(cohort >= 1920 & cohort <= 1929, "1920-29", tb_period),
@@ -306,86 +368,161 @@ tb.2 <- GSS3.df %>%
        tb_period = ifelse(cohort >= 1950 & cohort <= 1959, "1950-59", tb_period),
        tb_period = ifelse(cohort >= 1960 & cohort <= 1973, "1960-73", tb_period)) %>%
   group_by(tb_period) %>%
-  summarise(mean_pm_same = mean(pm_same),
-            mean_pm_otherprot = mean(pm_otherprot),
-            mean_pm_otherrel = mean(pm_otherrel),
-            mean_pm_none = mean(pm_none),
-            mean_pc_same = mean(pc_same),
-            mean_pc_otherprot = mean(pc_otherprot),
-            mean_pc_otherrel = mean(pc_otherrel),
-            mean_pc_none = mean(pc_none)) 
-#As above, this code is still not doing exactly what we want it to do. In an earlier version, we were #able to get the code to calculate the proportions by decade, but for some reason the code is now just #returning one proporation across all decades. 
-#
+  arrange(cohort) %>% 
+  mutate(adult_main = ifelse(fund == 2 | fund == 3 & relig == 1, 1, 0), # People who identify as mainlin
+    adult_cons = ifelse(fund == 1 & relig == 1, 1, 0), # People who identify as conservative 
+    kid_cons = ifelse(fund16 == 1 & relig16 == 1, 1, 0), # People who were raised conservative 
+    kid_main = ifelse(fund16 == 2 | fund16 == 3 & relig16 == 1, 1, 0), # People who were raised conservative 
+    kid_other = ifelse(fund16 > 2 & relig16 == 2 | relig16 == 3 | relig16 == 5 | relig16 == 6 | relig16 == 7 | relig16 == 8 | relig16 == 9 | relig16 == 10 | relig16 == 11 | relig16 == 12 | relig16 == 13, 1, 0), # People who were raised in another religion
+    kid_none = ifelse(fund16 >1 & relig16 == 4, 1, 0), # People who were raised in no religion
+        pm_same = sum(ifelse(kid_main == 1 & adult_main == 1, 1, 0))/sum(ifelse(adult_main == 1,1,0)), # Proportion of mainliners who were also raised mainline
+         pm_otherprot = sum(ifelse(kid_cons == 1 & adult_main == 1,1,0))/sum(ifelse(adult_main == 1,1,0)), # Proportion of mainliners who were raised conservative 
+         pm_otherrel = sum(ifelse(kid_other == 1 & adult_main == 1,1,0))/sum(ifelse(adult_main == 1,1,0)), # Proportion of mainliners who were raised in another religion 
+         pm_none = sum(ifelse(kid_none ==1 & adult_main == 1,1,0))/sum(ifelse(adult_main == 1,1,0)), # Proportion of mainliners who were raised in no religion 
+         pc_same = sum(ifelse(kid_cons == 1 & adult_cons == 1,1,0))/sum(ifelse(adult_cons == 1,1,0)), # Proportion of conservatives who were raised conservative 
+         pc_otherprot = sum(ifelse(kid_main == 1 & adult_cons == 1,1,0))/sum(ifelse(adult_cons == 1,1,0)), # Proportion of conservatives who were raised mainline
+         pc_otherrel = sum(ifelse(kid_other == 1 & adult_cons == 1,1,0))/sum(ifelse(adult_cons == 1,1,0)), # Proportion of conservatives who were raised in another religion 
+         pc_none = sum(ifelse(kid_none == 1 & adult_cons == 1,1,0))/sum(ifelse(adult_cons == 1,1,0))) # Proportion of conservatives who were raised in no religion
+
+# Put in table format that aggregates into decades
+
+tb.2 <- GSS3.df %>%
+ arrange(cohort) %>% 
+  group_by(tb_period) %>%
+  summarise(mean_pm_same = round(mean(pm_same), 2), # Average proportions of each category for each decade
+            mean_pm_otherprot = round(mean(pm_otherprot), 2),
+            mean_pm_otherrel = round(mean(pm_otherrel), 2),
+            mean_pm_none = round(mean(pm_none), 2),
+            mean_pc_same = round(mean(pc_same), 2),
+            mean_pc_otherprot = round(mean(pc_otherprot), 2),
+            mean_pc_otherrel = round(mean(pc_otherrel), 2),
+            mean_pc_none = round(mean(pc_none), 2))
+colnames(tb.2) <- c("Decade", "Same as Current (M)", "Other Protestant (M)", "Other Religion (M)", "No Religion (M)", "Same as Current (C)", "Other Protestant (C)", "Other Religion (C)", "No Religion (C)")
+
 tb.2
 
+# As is the case with Table 1, these percentages do not match up perfectly with those listed in the paper. This could be due to the application of survey weights and/or a difference in coding religious identification (e.g. their amalgamation of GSS variables to create the "other religion" category). 
 ```
 
 *Extension of Figure 1: Fertility by Denominational Type*
 This paper was published in 2001, and so the authors used GSS data up through 1998 to analyze trends in denominational affiliation and fertility. They looked at cohorts born between 1903 and 1973. We have the the GSS cumulative data through 2006, so we are curious to see how, if at all, trends in affiliation or fertility may have changed since 1998. 
 
-```{r}
-# Extend the dataframe to include all data until 2006, and cohorts through 1981. 
-extended.df <- GSS.df %>%
-  select(cohort, age, sex, relig, relig16, fund, fund16, childs, year) %>%
+```{r, warning = FALSE}
+# Create new dataframe with the cumulative data. Select relevant variables. 
+
+GSS.new.ext.df <- GSS.df %>%
+  select(cohort, age, sex, relig, relig16, fund, fund16, childs, year, oversamp, formwt, wtssall, sampcode, sample, adults) %>%
   arrange(desc(cohort)) %>%
-  filter(cohort >= 1903, cohort <= 1981, age >= 25, age <= 74, !is.na(relig), !is.na(relig16), !is.na(fund), !is.na(fund16), !is.na(childs), !is.na(cohort))
+  filter(year, cohort >= 1903, cohort <= 1981, age >= 25, age <= 74)
+
+# Remove missing data.
+extended.df <- na.omit(GSS.new.ext.df)
+
+# Calculate the composite weight and recode the sample variable to manage black oversamples. 
+extended.df <- 
+  transform( 
+  extended.df,
+# The calculation for compwt comes from http://sda.berkeley.edu/D3/GSS10/Doc/gs100195.htm#COMPWT
+compwt =  oversamp  *  formwt * wtssall * adults,
+# The calculation for samplerc comes from http://sda.berkeley.edu/D3/GSS10/Doc/gs100195.htm#SAMPLERC
+samplerc = 
+# If sample is a three or a four, samplerc should be a three
+ifelse(sample %in% 3:4, 3, 
+# If sample is a six or a seven, samplerc should be a six
+ifelse(sample %in% 6:7, 6, 
+# Otherwise, samplerc should just be set to sample
+sample))
+)
+
+# Specify survey design
+extended.design <- svydesign(~sampcode, strata = ~samplerc, data = subset(extended.df, !is.na(sampcode)), weights = ~compwt, nest = TRUE)
 
 # Recode denominations. 
+extended.df$adult_main2 <- ifelse((extended.df$fund == 2 | extended.df$fund == 3) & extended.df$relig == 1, 1, 0)
+adult_main2 <- extended.df$adult_main2
 
-extended.df$adult_mainline2 <- ifelse((extended.df$fund == 2 | extended.df$fund == 3) & extended.df$relig == 1, 1, 0)
-adult_mainline2 <- extended.df$adult_mainline2
+extended.df$adult_cons2 <- ifelse((extended.df$fund == 1) & extended.df$relig == 1, 1, 0)
+adult_cons2 <- extended.df$adult_cons2
 
-# Subset the mainline fertility data.
+extended.df$adult_prot2 <- ifelse((extended.df$fund <=3 ) & extended.df$relig == 1, 1, 0)
+adult_prot2 <- extended.df$adult_prot2
 
-mainline_childs2 <- extended.df  %>% 
-  select(cohort, childs)  %>% 
-  filter(adult_mainline2 == 1) %>%
-  group_by(cohort) %>%
-  summarise(mean(childs)/n_distinct(cohort))
+# Subset the Protestant data.
+prot2_only <- extended.df %>%
+  filter(adult_prot2 == 1)
 
-# Subset the conservative fertility data.
+# Specify the survey design for the Protestant subset.
+extended.design_prot <- 
+  svydesign( 
+    ~sampcode, 
+    strata = ~samplerc, 
+  data = subset(prot2_only, !is.na(sampcode)) , 
+weights = ~compwt, 
+nest = TRUE 
+)
 
-cons_childs2 <- extended.df  %>% 
-  select(cohort, childs)  %>% 
-  filter(adult_mainline2 == 0) %>%
-  group_by(cohort) %>%
-  summarise(mean(childs)/n_distinct(cohort))
+# Subset the mainline data.
+main2_only <- extended.df %>%
+  filter(adult_main2 == 1)
 
-# Convert to dataframes that ggplot can recognize.
+# Specify survey design for the mainline subset.
+extended.design_main <- 
+  svydesign( 
+    ~sampcode, 
+  strata = ~samplerc, 
+data = subset(main2_only, !is.na(sampcode)) , 
+weights = ~compwt, 
+nest = TRUE 
+)
 
-# Children born to mainline women. "CEB" stands for "children ever born."
+# Subset the conservative data.
+cons2_only <- extended.df %>%
+  filter(adult_cons2 == 1)
 
-m_childs2 <- as.data.frame(mainline_childs2)
-names(m_childs2) = c("m_cohort","m_CEB")
+# Specify the survey design for the conservative subset.
+extended.design_cons <- 
+  svydesign( 
+    ~sampcode, 
+  strata = ~samplerc, 
+data = subset(cons2_only, !is.na(sampcode)) , 
+weights = ~compwt, 
+nest = TRUE 
+)
 
-# Children born to conservative women:
+# Calculate the weighted mean number of children born to mainline women. Group by cohort.
+mean_main_childs2 <- svyby(~childs, ~cohort, extended.design_main, svymean)
 
-c_childs2 <- as.data.frame(cons_childs2)
-names(c_childs2) = c("c_cohort", "c_CEB")
+# Calculate the weighted mean number of children born to conservative women. Group by cohort.
+mean_cons_childs2 <- svyby(~childs, ~cohort, extended.design_cons, svymean)
 
-# Plot 
+# Calculate the weighted mean number of children born to all Protestant women. Group by cohort.
+mean_prot_childs2 <- svyby(~childs, ~cohort, extended.design_prot, svymean)
 
-p.ext <- ggplot() +
-  geom_point(data =  m_childs2, aes(m_cohort, m_CEB), color = "blue") + 
-  geom_smooth(data = m_childs2, aes(m_cohort, m_CEB), size = 1.5, method = "loess", span = .2, se = FALSE, color = "blue") +
+# Plot. 
+ext1 <- ggplot() +
+  geom_point(data = mean_main_childs2, aes(cohort, childs, color = "blue")) + 
+  geom_smooth(data = mean_main_childs2, aes(cohort, childs, color = "blue"), size = 1.5, method = "loess", span = .3, se = FALSE, color = "blue") +
   ggtitle("Fertility by Denomination Type") + 
   labs(x = "Year of Birth", y = "Births per Woman") +
   ylim(c(1, 4)) + 
   xlim(c(1903, 1983)) +
-  geom_point(data = c_childs2, aes(c_cohort, c_CEB), shape = 1, color = "red") + 
-  geom_smooth(data = c_childs2, aes(c_cohort, c_CEB), method = "loess", span = .2, se = FALSE, color = "red") 
-# annotation_custom(grobTree(textGrob("Extension Figure - Fertility (children ever born) by denomination type: US Protestant women, 45-69 years old. CEB data are smoothed using loess regression.", x = 0.1, y = 0.1, hjust = 0, gp = gpar(col = "grey60", fontsize = 10, fontface = "italic")))) 
-# This annotation is not showing up properly. 
-# The red line corresponds to mainliners and the blue to conservatives.  
-p.ext
+  geom_point(data = mean_cons_childs2, aes(cohort, childs, color = "red"), shape = 1) + 
+  geom_smooth(data = mean_cons_childs2, aes(cohort, childs, color = "red"), method = "loess", span = .3, se = FALSE, color = "red") +
+  scale_colour_manual(values=c("blue", "red"), labels=c("Mainline: Children Ever Born", "Conservative: Children Ever Born", "All Protestant: Children Ever Born")) + 
+  theme(legend.key = element_blank(), 
+        legend.title = element_blank(),
+        legend.position = "top",
+        legend.box = "horizontal") +
+  guides(col = guide_legend()) +
+  scale_linetype_manual(values = c(rep("solid", 3))) 
+ext1.note <- arrangeGrob(ext1, 
+        sub = textGrob("Extension Figure: Fertility by denominational type: U.S. Protestant women, 45 - 69 years old. Data \nare from the GSS, 1973-2006, smoothed using loess regression",
+        x = .1, hjust = 0, vjust = .5, 
+        gp = gpar(fontface = "italic", fontsize = 10)))
+print(ext1.note)
 
 ```
+
+
 When we add in 8 more years of data and 8 more cohorts, we see that fertility has continued to decline for both mainline and conservative Protestants. Between 1973 and 1980, the slope of decline for conservatives appears to be steeper than that of mainlines, which suggests that perhaps conservative fertility rates may intersect with mainline fertility rates within the next decade. This would be an interesting phenomenon to investigate further in the future, as we have several hypotheses about why fertility rates between the two denominations may be converging (e.g. rising levels of education among conservatives, later age of marriage for conservative women).
 
-sum <- 0
-
-for(i in  1:50){
-
-  sum <- sum + i
-
-}
