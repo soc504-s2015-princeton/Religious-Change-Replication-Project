@@ -1,0 +1,29 @@
+---
+title: "Response_to_Reviewers"
+author: "Jessamin Birdsall and Grace Tien"
+date: "12 May 2015"
+output: html_document
+---
+
+Dear Reviewers,
+
+Thank you all for your helpful feedback on our code. We have considered the suggestions you provided and made an effort to incorporate them in the time available to us. Below is a summary of the changes that we have made:
+
+- Modified code for Table 1 and Table 2. These tables are now showing the proportions separately for each decade rather than showing one average proportion across all decades. We have also cleaned up the formatting and inserted additional comments to explain the calculations at each stage. 
+- Fixed knitting issue related to Table 2.
+- Cleaned up spacing and other stylistic errors.
+- Improved variable naming consistency ("mainline" is now referred to as "main" throughout).
+- Improved specificity/clarity of comments (e.g. contents of the hout.df, model for Figure 3, reasons for certain decisions).
+- Added legends and annotations to figures to improve readibility.
+- Endeavored to apply survey weights to improve accuracy. This was challenging and we were only able to do it for Figure 1 and the extension. We received some guidance from Q-APS, classmates, and code from others who have worked with GSS data. With more time, we would strive to apply the weights comprehensively to improve the accuracy of the results. I'm sure that the elegance and efficiency of the weight application could also be improved. 
+- Removed unused dataframes. 
+- Automated confidence interval calculations with a function. 
+
+With additional time, further improvements we would seek to make include:
+- complete an accurate, comprehensive, efficient application of weights
+- improve the formatting and presentation of tables and figures.
+
+Thank you again for your comments. 
+
+
+
